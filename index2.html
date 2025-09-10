@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Enhanced Eye-Tracking Experiment</title>
+  <title>Cognitive Eye-Tracking Experiment</title>
   <style>
     body {
       font-family: sans-serif;
@@ -20,21 +20,38 @@
       width: 80%;
       max-width: 800px;
     }
-    #sentence {
-      font-size: 26px;
+    #taskContainer {
+      font-size: 24px;
       line-height: 1.8em;
-      min-height: 3em; /* Reserve space to prevent layout shifts */
-      color: #333;
+      min-height: 6em;
+      padding: 1em;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background: #fff;
+      margin-bottom: 1.5em;
     }
-    #sentence span {
-      margin: 0 6px;
-      padding: 2px 6px;
+    #taskContainer span {
+      margin: 0 5px;
+      padding: 2px 5px;
       border-radius: 6px;
     }
+    .question {
+        font-weight: bold;
+        color: #333;
+        display: block;
+        margin-bottom: 1em;
+    }
+    .answer {
+        color: #555;
+        display: block;
+    }
     #status {
-      margin-top: 1em;
       font-size: 18px;
       color: #555;
+      margin-bottom: 1em;
+      line-height: 1.6;
+      text-align: left;
+      max-width: 600px;
     }
     #startButton {
       font-size: 20px;
@@ -42,7 +59,7 @@
       cursor: pointer;
     }
     #results {
-      display: none; /* Hidden by default */
+      display: none;
       text-align: left;
     }
     #downloadLink {
@@ -68,15 +85,17 @@
 <body>
 
   <div id="experimentContainer">
-    <div id="sentence"></div>
-    <div id="status">Please look at the red dot to calibrate, then click Start.</div>
-    <button id="startButton" disabled>Start Experiment</button>
+    <div id="taskContainer"></div>
+    <div id="status">
+        <b>Instructions:</b> You are about to see a series of questions and answers. Each one will be displayed for about 12 seconds. Please read them to understand the logic. Feel free to look back and forth between the question and the answer as you think.
+    </div>
+    <button id="startButton" disabled>Calibrating... Please Follow the Dot</button>
   </div>
   
   <div id="results">
     <h2>Experiment Complete!</h2>
-    <p>Your gaze data has been compiled. You can download it as a JSON file.</p>
-    <a href="#" id="downloadLink">Download scanpath_results.json</a>
+    <p>Thank you for your participation. Your gaze data has been compiled below.</p>
+    <a href="#" id="downloadLink">Download results.json</a>
     <h3>Raw JSON Data</h3>
     <textarea id="jsonData" readonly></textarea>
   </div>
@@ -84,16 +103,24 @@
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
     // --- Configuration ---
-    const sentences = [
-      "The quick brown fox jumps over the lazy dog.",
-      "Eye-tracking technology helps us understand user behavior on web pages.",
-      "Regressions are when the eye moves backward to re-read previous text.",
-      "This is the final sentence of the experiment."
+    const tasks = [
+      {
+        question: "A farmer has 17 sheep and all but 8 die. How many sheep are left?",
+        answer: "The answer is 8. The phrase 'all but 8' directly states the number remaining."
+      },
+      {
+        question: "What is the meaning of the sentence: The old man the boat?",
+        answer: "The word 'man' is used as a verb, meaning to operate. The elderly are staffing the boat."
+      },
+      {
+        question: "Data: Team A scored 20 points. Team B scored 40. Team C scored 30. Is the following statement true or false? Team B scored more than A and C combined.",
+        answer: "False. Team A and C's combined score is 50, which is more than Team B's score of 40."
+      }
     ];
-    const DURATION_PER_SENTENCE = 10000; // 10 seconds in milliseconds
+    const DURATION_PER_TASK = 12000; // 12 seconds in milliseconds
 
     // --- UI Elements ---
-    const sentenceContainer = document.getElementById("sentence");
+    const taskContainer = document.getElementById("taskContainer");
     const statusEl = document.getElementById("status");
     const startButton = document.getElementById("startButton");
     const experimentContainer = document.getElementById("experimentContainer");
@@ -101,12 +128,11 @@
 
     // --- State Variables ---
     let allResults = [];
-    let currentSentenceIndex = 0;
+    let currentTaskIndex = 0;
     let gazeCounts = [];
     let scanpath = [];
     let wordSpans = [];
-    let words = [];
-    
+    let allWords = [];
     let collecting = false;
     let currentWord = null;
     let lastWord = null;
@@ -117,11 +143,8 @@
       await webgazer.setRegression("ridge")
         .setGazeListener((data, elapsed) => {
           if (!data || !collecting) return;
-
-          const x = data.x;
-          const y = data.y;
+          const { x, y } = data;
           let hitWordIndex = null;
-
           wordSpans.forEach((span, i) => {
             const rect = span.getBoundingClientRect();
             if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
@@ -129,14 +152,12 @@
               gazeCounts[i]++;
             }
           });
-
-          // Update scanpath with dwell filter (~100ms)
           if (hitWordIndex !== null) {
             if (hitWordIndex !== currentWord) {
               currentWord = hitWordIndex;
               dwellStart = elapsed;
             } else {
-              if (elapsed - dwellStart > 100) { // Fixated for >100ms
+              if (elapsed - dwellStart > 100) {
                 if (hitWordIndex !== lastWord) {
                   scanpath.push(hitWordIndex);
                   lastWord = hitWordIndex;
@@ -147,103 +168,97 @@
         })
         .begin();
       
-      webgazer.showVideoPreview(true).showPredictionPoints(true);
-      
-      // Enable start button once WebGazer is ready
+      webgazer.showVideoPreview(false).showPredictionPoints(false);
+      webgazer.clearData();
+
       startButton.disabled = false;
-      statusEl.textContent = "Calibration complete. You can now start the experiment.";
+      startButton.textContent = "Start Experiment";
     };
 
     // --- Experiment Flow ---
     startButton.addEventListener("click", startExperiment);
 
+    // MODIFIED TO HIDE THE STATUS ELEMENT
     function startExperiment() {
       allResults = [];
-      currentSentenceIndex = 0;
+      currentTaskIndex = 0;
       startButton.style.display = "none";
-      statusEl.textContent = "The experiment is in progress...";
-      showNextSentence();
+      statusEl.style.display = "none"; // Hide the instructions/status text
+      showNextTask();
     }
 
-    function showNextSentence() {
-      if (currentSentenceIndex >= sentences.length) {
+    function showNextTask() {
+      if (currentTaskIndex >= tasks.length) {
         displayFinalResults();
         return;
       }
-
-      // Clear previous sentence
-      sentenceContainer.innerHTML = "";
-      
-      // Reset state for the new sentence
-      const sentenceText = sentences[currentSentenceIndex];
-      words = sentenceText.split(" ");
-      gazeCounts = new Array(words.length).fill(0);
+      taskContainer.innerHTML = "";
+      const task = tasks[currentTaskIndex];
+      const questionText = `Question: ${task.question}`;
+      const answerText = `Answer: ${task.answer}`;
+      allWords = `${questionText} ${answerText}`.split(/\s+/);
+      gazeCounts = new Array(allWords.length).fill(0);
       scanpath = [];
       wordSpans = [];
       currentWord = null;
       lastWord = null;
-      dwellStart = 0;
-
-      // Create and display the new sentence
-      words.forEach(w => {
-        const span = document.createElement("span");
-        span.textContent = w;
-        sentenceContainer.appendChild(span);
-        wordSpans.push(span);
+      
+      const qSpan = document.createElement('div');
+      qSpan.className = 'question';
+      questionText.split(/\s+/).forEach(word => {
+          const span = document.createElement("span");
+          span.textContent = word;
+          qSpan.appendChild(span);
+          wordSpans.push(span);
       });
+      taskContainer.appendChild(qSpan);
 
-      // Start collecting data and set timer for the next step
+      const aSpan = document.createElement('div');
+      aSpan.className = 'answer';
+      answerText.split(/\s+/).forEach(word => {
+          const span = document.createElement("span");
+          span.textContent = word;
+          aSpan.appendChild(span);
+          wordSpans.push(span);
+      });
+      taskContainer.appendChild(aSpan);
+
       collecting = true;
-      setTimeout(processAndGoNext, DURATION_PER_SENTENCE);
+      setTimeout(processAndGoNext, DURATION_PER_TASK);
     }
 
     function processAndGoNext() {
-      collecting = false; // Stop data collection
-
-      // Calculate regressions for the completed sentence
+      collecting = false;
       const regressions = [];
       for (let i = 1; i < scanpath.length; i++) {
         if (scanpath[i] < scanpath[i-1]) {
           regressions.push({
-            from: words[scanpath[i-1]],
-            to: words[scanpath[i]],
-            from_index: scanpath[i-1],
-            to_index: scanpath[i]
+            from: allWords[scanpath[i-1]],
+            to: allWords[scanpath[i]],
           });
         }
       }
-
-      // Store the results for this sentence
       allResults.push({
-        sentence: sentences[currentSentenceIndex],
-        words: words,
-        gaze_counts: gazeCounts,
-        scanpath_indices: scanpath,
-        scanpath_words: scanpath.map(i => words[i]),
+        task: tasks[currentTaskIndex],
+        gaze_counts_per_word: allWords.map((word, i) => ({ word, count: gazeCounts[i] })),
+        scanpath_words: scanpath.map(i => allWords[i]),
         regressions: regressions
       });
-
-      // Move to the next sentence
-      currentSentenceIndex++;
-      showNextSentence();
+      currentTaskIndex++;
+      showNextTask();
     }
 
     function displayFinalResults() {
       webgazer.end();
       experimentContainer.style.display = "none";
       resultsContainer.style.display = "block";
-
-      const jsonString = JSON.stringify(allResults, null, 2); // Pretty print JSON
-
-      // Display in textarea
+      const jsonString = JSON.stringify(allResults, null, 2);
       document.getElementById("jsonData").value = jsonString;
-
-      // Create download link
       const blob = new Blob([jsonString], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const downloadLink = document.getElementById("downloadLink");
       downloadLink.href = url;
-      downloadLink.download = "scanpath_results.json";
+      downloadLink.download = "cognitive_scanpath_results.json";
     }
   </script>
 </body>

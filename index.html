@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebGazer Reading Scanpath</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background: #fafafa;
+      text-align: center;
+    }
+    #sentence, #resultSentence {
+      font-size: 24px;
+      line-height: 1.8em;
+    }
+    #sentence span, #resultSentence span {
+      margin: 0 6px;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    #results {
+      display: none;
+      max-width: 700px;
+      font-size: 18px;
+      line-height: 1.6em;
+    }
+    #log {
+      margin-top: 1em;
+      font-size: 14px;
+      background: #f0f0f0;
+      padding: 1em;
+      border: 1px solid #ccc;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <div id="sentence"></div>
+  <div id="results">
+    <h2>Focus Results</h2>
+    <p>Heatmap of gaze counts (red = more looked at):</p>
+    <div id="resultSentence"></div>
+    <h3>Scanpath Sequence</h3>
+    <div id="scanpath"></div>
+    <h3>Detailed Counts</h3>
+    <div id="log"></div>
+  </div>
+
+  <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+  <script>
+    const sentenceText = "This is a demo sentence to test where people focus and sometimes go back.";
+    const words = sentenceText.split(" ");
+    const sentenceContainer = document.getElementById("sentence");
+    const resultContainer = document.getElementById("resultSentence");
+    const logEl = document.getElementById("log");
+    const scanpathEl = document.getElementById("scanpath");
+
+    const wordSpans = words.map(w => {
+      const span = document.createElement("span");
+      span.textContent = w;
+      sentenceContainer.appendChild(span);
+      return span;
+    });
+
+    const gazeCounts = new Array(words.length).fill(0);
+    let collecting = true;
+
+    // For scanpath
+    let currentWord = null;
+    let lastWord = null;
+    let dwellStart = 0;
+    const scanpath = [];
+
+    window.onload = async () => {
+      await webgazer.setRegression("ridge")
+        .setGazeListener((data, elapsed) => {
+          if (data && collecting) {
+            const x = data.x, y = data.y;
+            let hitWord = null;
+            wordSpans.forEach((span, i) => {
+              const rect = span.getBoundingClientRect();
+              if (x >= rect.left && x <= rect.right &&
+                  y >= rect.top && y <= rect.bottom) {
+                hitWord = i;
+                gazeCounts[i]++;
+              }
+            });
+
+            // Update scanpath with dwell filter (~100ms)
+            if (hitWord !== null) {
+              if (hitWord !== currentWord) {
+                currentWord = hitWord;
+                dwellStart = elapsed;
+              } else {
+                if (elapsed - dwellStart > 100) { // stable >100ms
+                  if (hitWord !== lastWord) {
+                    scanpath.push(hitWord);
+                    lastWord = hitWord;
+                  }
+                }
+              }
+            }
+          }
+        })
+        .begin();
+
+      webgazer.showVideoPreview(false).showPredictionPoints(false);
+
+      setTimeout(showResults, 20000); // stop after 20s
+    };
+
+    function showResults() {
+      collecting = false;
+      sentenceContainer.style.display = "none";
+      document.getElementById("results").style.display = "block";
+
+      // Heatmap
+      const maxCount = Math.max(...gazeCounts, 1);
+      words.forEach((w, i) => {
+        const span = document.createElement("span");
+        span.textContent = w;
+        if (gazeCounts[i] > 0) {
+          const intensity = gazeCounts[i] / maxCount;
+          span.style.background = `rgba(255,0,0,${intensity})`;
+        }
+        resultContainer.appendChild(span);
+        resultContainer.append(" ");
+      });
+
+      // Scanpath
+      const scanText = scanpath.map(i => words[i]).join(" → ");
+      scanpathEl.textContent = scanText;
+
+      // Mark regressions
+      const regressions = [];
+      for (let i = 1; i < scanpath.length; i++) {
+        if (scanpath[i] < scanpath[i-1]) {
+          regressions.push(`${words[scanpath[i-1]]} → ${words[scanpath[i]]}`);
+        }
+      }
+      if (regressions.length > 0) {
+        const regDiv = document.createElement("div");
+        regDiv.innerHTML = "<strong>Regressions detected:</strong><br>" + regressions.join("<br>");
+        scanpathEl.appendChild(regDiv);
+      }
+
+      // Raw counts
+      logEl.innerHTML = gazeCounts.map((c, i) => `${words[i]}: ${c}`).join("<br>");
+    }
+  </script>
+</body>
+</html>

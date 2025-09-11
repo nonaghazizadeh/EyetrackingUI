@@ -205,7 +205,7 @@
     
     window.onload = async () => {
         mainContainer.style.visibility = 'hidden';
-        await webgazer.setRegression("ridge").begin(); // FIX: Call .begin() only ONCE
+        await webgazer.setRegression("ridge").begin();
         webgazer.showVideoPreview(true).showPredictionPoints(false);
         webgazer.clearData();
         
@@ -221,33 +221,6 @@
     let currentWord = null, lastWord = null, dwellStart = 0;
 
     function startExperiment() {
-        // FIX: Set the listener only ONCE at the start of the experiment
-        webgazer.setGazeListener((data, elapsed) => {
-            if (!data || !collecting) return;
-            const { x, y } = data;
-            let hitWordIndex = null;
-            wordSpans.forEach((span, i) => {
-                const rect = span.getBoundingClientRect();
-                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-                    hitWordIndex = i;
-                    gazeCounts[i]++;
-                }
-            });
-            if (hitWordIndex !== null) {
-                if (hitWordIndex !== currentWord) {
-                    currentWord = hitWordIndex;
-                    dwellStart = elapsed;
-                } else {
-                    if (elapsed - dwellStart > 100) {
-                        if (hitWordIndex !== lastWord) {
-                            scanpath.push(hitWordIndex);
-                            lastWord = hitWordIndex;
-                        }
-                    }
-                }
-            }
-        });
-        
         taskContainer.style.display = 'block';
         allResults = [];
         currentTaskIndex = 0;
@@ -266,6 +239,7 @@
       const questionText = `Question: ${task.question}`;
       const answerText = `Answer: ${task.answer}`;
       
+      // Reset all state variables for the new task
       allWords = []; gazeCounts = []; scanpath = []; wordSpans = [];
       currentWord = null; lastWord = null;
 
@@ -276,9 +250,12 @@
           const span = document.createElement("span");
           span.textContent = word;
           qSpan.appendChild(span);
-          qSpan.append(' '); // FIX: Add a space after each word
+          qSpan.append(' ');
       });
       taskContainer.appendChild(qSpan);
+      
+      // We must re-populate wordSpans AFTER creating them in the DOM
+      qSpan.querySelectorAll('span').forEach(span => wordSpans.push(span));
 
       const aSpan = document.createElement('div');
       aSpan.className = 'answer';
@@ -287,20 +264,49 @@
           const span = document.createElement("span");
           span.textContent = word;
           aSpan.appendChild(span);
-          aSpan.append(' '); // FIX: Add a space after each word
+          aSpan.append(' ');
       });
       taskContainer.appendChild(aSpan);
+
+      // We must re-populate wordSpans AFTER creating them in the DOM
+      aSpan.querySelectorAll('span').forEach(span => wordSpans.push(span));
       
       gazeCounts = new Array(allWords.length).fill(0);
       
-      webgazer.resume(); // FIX: Resume listener for the new task
+      // FIX: Set a fresh listener for each task to ensure it has the correct context
+      webgazer.setGazeListener((data, elapsed) => {
+        if (!data || !collecting) return;
+        const { x, y } = data;
+        let hitWordIndex = null;
+        // The listener will now correctly use the wordSpans for the CURRENT task
+        wordSpans.forEach((span, i) => {
+            const rect = span.getBoundingClientRect();
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                hitWordIndex = i;
+                gazeCounts[i]++;
+            }
+        });
+        if (hitWordIndex !== null) {
+            if (hitWordIndex !== currentWord) {
+                currentWord = hitWordIndex;
+                dwellStart = elapsed;
+            } else {
+                if (elapsed - dwellStart > 100) {
+                    if (hitWordIndex !== lastWord) {
+                        scanpath.push(hitWordIndex);
+                        lastWord = hitWordIndex;
+                    }
+                }
+            }
+        }
+      });
+
       collecting = true;
       setTimeout(processAndGoNext, DURATION_PER_TASK);
     }
 
     function processAndGoNext() {
-      collecting = false;
-      webgazer.pause(); // FIX: Pause listener between tasks
+      collecting = false; // Stop the listener from processing data
       const taggedWords = analyzeAndTagTrial(allWords, gazeCounts, scanpath);
       allResults.push({
         task: tasks[currentTaskIndex],
@@ -321,9 +327,10 @@
       const url = URL.createObjectURL(blob);
       const downloadLink = document.getElementById("downloadLink");
       downloadLink.href = url;
-      downloadLink.download = "tagged_results.json";
+      downloadlink.download = "tagged_results.json";
     }
 
+    // --- Analysis Functions (Unchanged) ---
     const CONFIG = { think_more_gaze_count: 15, reevaluate_min_distance: 2, skip_step_min_distance: 5, parse_struggle_window: 5, parse_struggle_word_range: 4 };
     function analyzeAndTagTrial(allWords, gazeCounts, scanpath) {
         let tags = Array(allWords.length).fill(null).map(() => []);

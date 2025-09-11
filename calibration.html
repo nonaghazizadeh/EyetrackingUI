@@ -15,30 +15,41 @@
       min-height: 100vh;
       background: #fafafa;
       text-align: center;
+      overflow: hidden; /* Prevent scrollbars during calibration */
     }
     #mainContainer, #results {
       width: 80%;
       max-width: 800px;
     }
     /* NEW: Styles for the calibration step */
-    #calibrationArea {
-      position: relative;
-      width: 400px;
-      height: 300px;
-      background: #222;
-      border-radius: 8px;
-      margin-bottom: 1em;
-    }
-    #webgazerVideoFeed, #faceOverlay {
-      position: absolute;
+    #calibrationScreen {
+      position: fixed;
       top: 0;
       left: 0;
-      width: 100%;
-      height: 100%;
+      width: 100vw;
+      height: 100vh;
+      background-color: rgba(255, 255, 255, 0.95);
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
     }
-    #faceOverlay {
-      stroke-width: 4px;
-      transition: stroke 0.3s ease-in-out;
+    #calibrationStatus {
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+    .calibrationPoint {
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      background-color: red;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .calibrationPoint:hover {
+      background-color: darkred;
     }
     #taskContainer {
       font-size: 24px;
@@ -49,7 +60,6 @@
       border-radius: 8px;
       background: #fff;
       margin-bottom: 1.5em;
-      display: none; /* Initially hidden */
     }
     .question, .answer {
         text-align: left;
@@ -100,23 +110,21 @@
   </style>
 </head>
 <body>
+  <div id="calibrationScreen">
+    <p id="calibrationStatus">Please wait for WebGazer to start...</p>
+  </div>
 
   <div id="mainContainer">
-    <div id="calibrationArea">
-      <svg id="faceOverlay" viewbox="0 0 400 300">
-        <ellipse cx="200" cy="150" rx="100" ry="130" fill="none" stroke="red"/>
-      </svg>
-    </div>
-    
     <div id="taskContainer"></div>
-    
-    <div id="status">Please position your face inside the red oval.</div>
-    <button id="startButton" disabled>Start Experiment</button>
+    <div id="status">
+        <b>Instructions:</b> You are about to see a series of questions and answers. Each one will be displayed for about 12 seconds. Please read them to understand the logic.
+    </div>
+    <button id="startButton" disabled>Complete Calibration to Start</button>
   </div>
   
   <div id="results">
     <h2>Experiment Complete!</h2>
-    <p>Thank you! Your gaze data has been analyzed and tagged. You can download it below.</p>
+    <p>Thank you! Your gaze data has been analyzed and tagged.</p>
     <a href="#" id="downloadLink">Download tagged_results.json</a>
     <h3>Raw JSON Data</h3>
     <textarea id="jsonData" readonly></textarea>
@@ -139,11 +147,11 @@
         answer: "False. Team A and C's combined score is 50, which is more than Team B's score of 40."
       }
     ];
-    const DURATION_PER_TASK = 12000; // 12 seconds in milliseconds
+    const DURATION_PER_TASK = 12000;
 
     // --- UI Elements ---
-    const calibrationArea = document.getElementById("calibrationArea");
-    const faceOverlay = document.getElementById("faceOverlay").querySelector('ellipse');
+    const calibrationScreen = document.getElementById("calibrationScreen");
+    const calibrationStatus = document.getElementById("calibrationStatus");
     const taskContainer = document.getElementById("taskContainer");
     const statusEl = document.getElementById("status");
     const startButton = document.getElementById("startButton");
@@ -153,123 +161,100 @@
     // --- State Variables ---
     let allResults = [];
     let currentTaskIndex = 0;
+    // ... other state variables
+    
+    // --- CALIBRATION LOGIC ---
+    let calibrationPoints = [
+        [ '10%', '10%' ], [ '10%', '50%' ], [ '10%', '90%' ],
+        [ '50%', '10%' ], [ '50%', '50%' ], [ '50%', '90%' ],
+        [ '90%', '10%' ], [ '90%', '50%' ], [ '90%', '90%' ]
+    ];
+    let calibrationIndex = 0;
+
+    function startCalibration() {
+        calibrationStatus.innerHTML = `Please look at and click the red dot. Dot ${calibrationIndex + 1} of ${calibrationPoints.length}`;
+        showCalibrationPoint();
+    }
+
+    function showCalibrationPoint() {
+        // Clear previous point if it exists
+        const existingPoint = document.querySelector('.calibrationPoint');
+        if (existingPoint) existingPoint.remove();
+
+        if (calibrationIndex >= calibrationPoints.length) {
+            endCalibration();
+            return;
+        }
+        
+        const [left, top] = calibrationPoints[calibrationIndex];
+        const point = document.createElement('div');
+        point.className = 'calibrationPoint';
+        point.style.left = left;
+        point.style.top = top;
+        
+        point.addEventListener('click', () => {
+            point.style.backgroundColor = 'green';
+            // Webgazer automatically uses clicks to calibrate
+            calibrationIndex++;
+            calibrationStatus.innerHTML = `Please look at and click the red dot. Dot ${calibrationIndex + 1} of ${calibrationPoints.length}`;
+            setTimeout(showCalibrationPoint, 500); // Show next point after a short delay
+        });
+        
+        calibrationScreen.appendChild(point);
+    }
+
+    function endCalibration() {
+        calibrationScreen.style.display = 'none';
+        startButton.disabled = false;
+        startButton.textContent = 'Start Experiment';
+        statusEl.textContent = 'Calibration complete. You can now start the experiment.';
+        webgazer.showVideoPreview(false).showPredictionPoints(true); // Show predictions now
+    }
+    
+    // --- WebGazer Initialization ---
+    window.onload = async () => {
+        // Hide main content until calibration is done
+        mainContainer.style.visibility = 'hidden';
+        
+        await webgazer.setRegression("ridge").begin();
+        webgazer.showVideoPreview(true).showPredictionPoints(false);
+        webgazer.clearData();
+        
+        mainContainer.style.visibility = 'visible';
+        startCalibration();
+    };
+    
+    // --- Experiment Flow ---
+    startButton.addEventListener("click", startExperiment);
+
+    function startExperiment() {
+        webgazer.showPredictionPoints(false); // Hide points during the actual experiment
+
+        webgazer.setGazeListener((data, elapsed) => {
+            // ... (The rest of the experiment and analysis code remains the same as before)
+            if (!data || !collecting) return;
+            // ... [gaze listener logic] ...
+        });
+        
+        taskContainer.style.display = 'block';
+        allResults = [];
+        currentTaskIndex = 0;
+        startButton.style.display = "none";
+        statusEl.style.display = "none"; 
+        showNextTask();
+    }
+    
+    // ... [ The rest of your `showNextTask`, `processAndGoNext`, `displayFinalResults`, 
+    //       and analysis functions (`analyzeAndTagTrial`, etc.) go here, unchanged from 
+    //       the previous version. ] ...
+
+    // --- (Paste the rest of your experiment and analysis functions here) ---
+    // The following code is from the previous version and is NOT changed.
     let gazeCounts = [], scanpath = [], wordSpans = [], allWords = [];
     let collecting = false;
     let currentWord = null, lastWord = null, dwellStart = 0;
     
-    // NEW: Calibration state
-    let faceCheckInterval = null;
-    let faceInBoxSince = 0;
-
-    window.onload = async () => {
-      // Start WebGazer but don't set the main gaze listener yet.
-      await webgazer.setRegression("ridge").begin();
-      
-      // Setup video preview for calibration
-      webgazer.showVideoPreview(true).showPredictionPoints(false);
-      webgazer.clearData();
-
-      // Start the face position check
-      faceCheckInterval = setInterval(checkFacePosition, 100);
-    };
-    
-    // NEW: Function to check if face is in the right position
-    function checkFacePosition() {
-        const faceData = webgazer.getFaceDetectionData();
-        const video = document.getElementById('webgazerVideoFeed');
-        if (!faceData || !video) return;
-
-        // Ideal face position and size (relative to video feed)
-        const target = {
-            x: video.width * 0.5,
-            y: video.height * 0.5,
-            w: video.width * 0.4, // Face should take up about 40% of the video width
-        };
-        const tolerance = { x: 50, y: 50, w: 50 };
-        
-        const faceBox = faceData[0].bbox;
-        const faceCenter = { x: faceBox.x + faceBox.w / 2, y: faceBox.y + faceBox.h / 2 };
-
-        const dx = Math.abs(faceCenter.x - target.x);
-        const dy = Math.abs(faceCenter.y - target.y);
-        const dw = Math.abs(faceBox.w - target.w);
-        
-        let message = "";
-        let isFaceInBox = true;
-
-        if (dw > tolerance.w) {
-            message = faceBox.w < target.w ? "Move Closer" : "Move Further Away";
-            isFaceInBox = false;
-        } else if (dx > tolerance.x || dy > tolerance.y) {
-            message = "Please Center Your Face";
-            isFaceInBox = false;
-        } else {
-            message = "Hold Steady...";
-        }
-
-        if (isFaceInBox) {
-            faceOverlay.style.stroke = 'green';
-            if (faceInBoxSince === 0) {
-                faceInBoxSince = Date.now();
-            } else if (Date.now() - faceInBoxSince > 2000) { // Hold for 2 seconds
-                clearInterval(faceCheckInterval);
-                statusEl.textContent = "Great! You are ready to start the experiment.";
-                startButton.disabled = false;
-            }
-        } else {
-            faceOverlay.style.stroke = 'red';
-            statusEl.textContent = message;
-            faceInBoxSince = 0; // Reset timer
-            startButton.disabled = true;
-        }
-    }
-
-    startButton.addEventListener("click", startExperiment);
-
-    function startExperiment() {
-      // Clean up calibration UI
-      clearInterval(faceCheckInterval);
-      calibrationArea.style.display = "none";
-      taskContainer.style.display = "block";
-      webgazer.showVideoPreview(false);
-
-      // --- SET THE OFFICIAL GAZE LISTENER FOR THE EXPERIMENT ---
-      webgazer.setGazeListener((data, elapsed) => {
-        if (!data || !collecting) return;
-        const { x, y } = data;
-        let hitWordIndex = null;
-        wordSpans.forEach((span, i) => {
-          const rect = span.getBoundingClientRect();
-          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-            hitWordIndex = i;
-            gazeCounts[i]++;
-          }
-        });
-        if (hitWordIndex !== null) {
-          if (hitWordIndex !== currentWord) {
-            currentWord = hitWordIndex;
-            dwellStart = elapsed;
-          } else {
-            if (elapsed - dwellStart > 100) {
-              if (hitWordIndex !== lastWord) {
-                scanpath.push(hitWordIndex);
-                lastWord = hitWordIndex;
-              }
-            }
-          }
-        }
-      });
-
-      // --- Start the actual task flow ---
-      allResults = [];
-      currentTaskIndex = 0;
-      startButton.style.display = "none";
-      statusEl.style.display = "none";
-      showNextTask();
-    }
-    
     function showNextTask() {
-      // ... (This function and the rest of the analysis code remain the same)
       if (currentTaskIndex >= tasks.length) {
         displayFinalResults();
         return;
@@ -305,6 +290,33 @@
       taskContainer.appendChild(aSpan);
       
       gazeCounts = new Array(allWords.length).fill(0);
+      
+      // Re-enable gaze listener for this task
+      webgazer.setGazeListener((data, elapsed) => {
+        if (!data || !collecting) return;
+        const { x, y } = data;
+        let hitWordIndex = null;
+        wordSpans.forEach((span, i) => {
+          const rect = span.getBoundingClientRect();
+          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+            hitWordIndex = i;
+            gazeCounts[i]++;
+          }
+        });
+        if (hitWordIndex !== null) {
+          if (hitWordIndex !== currentWord) {
+            currentWord = hitWordIndex;
+            dwellStart = elapsed;
+          } else {
+            if (elapsed - dwellStart > 100) {
+              if (hitWordIndex !== lastWord) {
+                scanpath.push(hitWordIndex);
+                lastWord = hitWordIndex;
+              }
+            }
+          }
+        }
+      }).begin(); // Re-engage listener
 
       collecting = true;
       setTimeout(processAndGoNext, DURATION_PER_TASK);
@@ -312,6 +324,7 @@
 
     function processAndGoNext() {
       collecting = false;
+      webgazer.pause(); // Pause listener between tasks
       const taggedWords = analyzeAndTagTrial(allWords, gazeCounts, scanpath);
       allResults.push({
         task: tasks[currentTaskIndex],
@@ -351,6 +364,7 @@
     function tagSkipStep(tags, scanpath) { for (let i = 1; i < scanpath.length; i++) { const o = scanpath[i - 1], d = scanpath[i]; if (d - o > CONFIG.skip_step_min_distance) { for (let j = o + 1; j < d; j++) tags[j].push("<skip_step>"); } } return tags; }
     function tagParseStruggle(tags, scanpath) { const { parse_struggle_window: w, parse_struggle_word_range: r } = CONFIG; if (scanpath.length < w) return tags; for (let i = 0; i <= scanpath.length - w; i++) { const win = scanpath.slice(i, i + w); const min = Math.min(...win), max = Math.max(...win); if (max - min <= r) { if (win.some((v, j, a) => j > 0 && v < a[j - 1])) { for (let k = min; k <= max; k++) tags[k].push("<parse_struggle>"); } } } return tags; }
     function tagCommitAnswer(tags, scanpath, totalWords) { if (!scanpath || scanpath.length < 3) return tags; const last = scanpath.slice(-3); if (last.every(p => p >= totalWords - 5)) tags[scanpath[scanpath.length - 1]].push("<commit_answer>"); return tags; }
+
   </script>
 </body>
 </html>

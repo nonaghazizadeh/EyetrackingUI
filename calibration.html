@@ -331,7 +331,7 @@
     }
 
     // --- Analysis Functions (Unchanged) ---
-    const CONFIG = { think_more_gaze_count: 15, reevaluate_min_distance: 2, skip_step_min_distance: 5, parse_struggle_window: 5, parse_struggle_word_range: 4 };
+    const CONFIG = { think_more_gaze_count: 15, reevaluate_min_distance: 2, skip_step_min_distance: 8, parse_struggle_window: 5, parse_struggle_word_range: 4 };
     function analyzeAndTagTrial(allWords, gazeCounts, scanpath) {
         let tags = Array(allWords.length).fill(null).map(() => []);
         const answerStartIndex = allWords.indexOf("Answer:") > -1 ? allWords.indexOf("Answer:") : Math.floor(allWords.length / 2);

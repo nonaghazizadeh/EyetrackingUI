@@ -21,7 +21,6 @@
       width: 80%;
       max-width: 800px;
     }
-    /* NEW: Styles for the calibration step */
     #calibrationScreen {
       position: fixed;
       top: 0;
@@ -132,7 +131,6 @@
 
   <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
   <script>
-    // --- Configuration ---
     const tasks = [
       {
         question: "A farmer has 17 sheep and all but 8 die. How many sheep are left?",
@@ -149,7 +147,6 @@
     ];
     const DURATION_PER_TASK = 12000;
 
-    // --- UI Elements ---
     const calibrationScreen = document.getElementById("calibrationScreen");
     const calibrationStatus = document.getElementById("calibrationStatus");
     const taskContainer = document.getElementById("taskContainer");
@@ -158,12 +155,9 @@
     const mainContainer = document.getElementById("mainContainer");
     const resultsContainer = document.getElementById("results");
 
-    // --- State Variables ---
     let allResults = [];
     let currentTaskIndex = 0;
-    // ... other state variables
     
-    // --- CALIBRATION LOGIC ---
     let calibrationPoints = [
         [ '10%', '10%' ], [ '10%', '50%' ], [ '10%', '90%' ],
         [ '50%', '10%' ], [ '50%', '50%' ], [ '50%', '90%' ],
@@ -177,7 +171,6 @@
     }
 
     function showCalibrationPoint() {
-        // Clear previous point if it exists
         const existingPoint = document.querySelector('.calibrationPoint');
         if (existingPoint) existingPoint.remove();
 
@@ -194,10 +187,9 @@
         
         point.addEventListener('click', () => {
             point.style.backgroundColor = 'green';
-            // Webgazer automatically uses clicks to calibrate
             calibrationIndex++;
             calibrationStatus.innerHTML = `Please look at and click the red dot. Dot ${calibrationIndex + 1} of ${calibrationPoints.length}`;
-            setTimeout(showCalibrationPoint, 500); // Show next point after a short delay
+            setTimeout(showCalibrationPoint, 500);
         });
         
         calibrationScreen.appendChild(point);
@@ -208,15 +200,12 @@
         startButton.disabled = false;
         startButton.textContent = 'Start Experiment';
         statusEl.textContent = 'Calibration complete. You can now start the experiment.';
-        webgazer.showVideoPreview(false).showPredictionPoints(true); // Show predictions now
+        webgazer.showVideoPreview(false).showPredictionPoints(false);
     }
     
-    // --- WebGazer Initialization ---
     window.onload = async () => {
-        // Hide main content until calibration is done
         mainContainer.style.visibility = 'hidden';
-        
-        await webgazer.setRegression("ridge").begin();
+        await webgazer.setRegression("ridge").begin(); // FIX: Call .begin() only ONCE
         webgazer.showVideoPreview(true).showPredictionPoints(false);
         webgazer.clearData();
         
@@ -224,16 +213,39 @@
         startCalibration();
     };
     
-    // --- Experiment Flow ---
     startButton.addEventListener("click", startExperiment);
 
-    function startExperiment() {
-        webgazer.showPredictionPoints(false); // Hide points during the actual experiment
+    // Experiment state variables
+    let gazeCounts = [], scanpath = [], wordSpans = [], allWords = [];
+    let collecting = false;
+    let currentWord = null, lastWord = null, dwellStart = 0;
 
+    function startExperiment() {
+        // FIX: Set the listener only ONCE at the start of the experiment
         webgazer.setGazeListener((data, elapsed) => {
-            // ... (The rest of the experiment and analysis code remains the same as before)
             if (!data || !collecting) return;
-            // ... [gaze listener logic] ...
+            const { x, y } = data;
+            let hitWordIndex = null;
+            wordSpans.forEach((span, i) => {
+                const rect = span.getBoundingClientRect();
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                    hitWordIndex = i;
+                    gazeCounts[i]++;
+                }
+            });
+            if (hitWordIndex !== null) {
+                if (hitWordIndex !== currentWord) {
+                    currentWord = hitWordIndex;
+                    dwellStart = elapsed;
+                } else {
+                    if (elapsed - dwellStart > 100) {
+                        if (hitWordIndex !== lastWord) {
+                            scanpath.push(hitWordIndex);
+                            lastWord = hitWordIndex;
+                        }
+                    }
+                }
+            }
         });
         
         taskContainer.style.display = 'block';
@@ -243,16 +255,6 @@
         statusEl.style.display = "none"; 
         showNextTask();
     }
-    
-    // ... [ The rest of your `showNextTask`, `processAndGoNext`, `displayFinalResults`, 
-    //       and analysis functions (`analyzeAndTagTrial`, etc.) go here, unchanged from 
-    //       the previous version. ] ...
-
-    // --- (Paste the rest of your experiment and analysis functions here) ---
-    // The following code is from the previous version and is NOT changed.
-    let gazeCounts = [], scanpath = [], wordSpans = [], allWords = [];
-    let collecting = false;
-    let currentWord = null, lastWord = null, dwellStart = 0;
     
     function showNextTask() {
       if (currentTaskIndex >= tasks.length) {
@@ -274,7 +276,7 @@
           const span = document.createElement("span");
           span.textContent = word;
           qSpan.appendChild(span);
-          wordSpans.push(span);
+          qSpan.append(' '); // FIX: Add a space after each word
       });
       taskContainer.appendChild(qSpan);
 
@@ -285,46 +287,20 @@
           const span = document.createElement("span");
           span.textContent = word;
           aSpan.appendChild(span);
-          wordSpans.push(span);
+          aSpan.append(' '); // FIX: Add a space after each word
       });
       taskContainer.appendChild(aSpan);
       
       gazeCounts = new Array(allWords.length).fill(0);
       
-      // Re-enable gaze listener for this task
-      webgazer.setGazeListener((data, elapsed) => {
-        if (!data || !collecting) return;
-        const { x, y } = data;
-        let hitWordIndex = null;
-        wordSpans.forEach((span, i) => {
-          const rect = span.getBoundingClientRect();
-          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
-            hitWordIndex = i;
-            gazeCounts[i]++;
-          }
-        });
-        if (hitWordIndex !== null) {
-          if (hitWordIndex !== currentWord) {
-            currentWord = hitWordIndex;
-            dwellStart = elapsed;
-          } else {
-            if (elapsed - dwellStart > 100) {
-              if (hitWordIndex !== lastWord) {
-                scanpath.push(hitWordIndex);
-                lastWord = hitWordIndex;
-              }
-            }
-          }
-        }
-      }).begin(); // Re-engage listener
-
+      webgazer.resume(); // FIX: Resume listener for the new task
       collecting = true;
       setTimeout(processAndGoNext, DURATION_PER_TASK);
     }
 
     function processAndGoNext() {
       collecting = false;
-      webgazer.pause(); // Pause listener between tasks
+      webgazer.pause(); // FIX: Pause listener between tasks
       const taggedWords = analyzeAndTagTrial(allWords, gazeCounts, scanpath);
       allResults.push({
         task: tasks[currentTaskIndex],

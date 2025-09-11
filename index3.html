@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cognitive Eye-Tracking Experiment with Integrated Tagging</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 2em;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #fafafa;
+      text-align: center;
+    }
+    #experimentContainer, #results {
+      width: 80%;
+      max-width: 800px;
+    }
+    #taskContainer {
+      font-size: 24px;
+      line-height: 1.8em;
+      min-height: 6em;
+      padding: 1.5em;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background: #fff;
+      margin-bottom: 1.5em;
+    }
+    #taskContainer span {
+      margin: 0 3px;
+      padding: 2px 4px;
+      border-radius: 6px;
+    }
+    .question {
+        font-weight: bold;
+        color: #333;
+        display: block;
+        margin-bottom: 1.5em;
+        text-align: left;
+        word-break: break-word;
+    }
+    .answer {
+        color: #555;
+        display: block;
+        font-weight: normal;
+        text-align: left;
+        word-break: break-word;
+    }
+    #status {
+      font-size: 18px;
+      color: #555;
+      margin-bottom: 1em;
+      line-height: 1.6;
+      text-align: left;
+      max-width: 600px;
+    }
+    #startButton {
+      font-size: 20px;
+      padding: 10px 20px;
+      cursor: pointer;
+    }
+    #results { display: none; text-align: left; }
+    #downloadLink {
+      display: block;
+      margin: 1em 0;
+      font-size: 18px;
+      padding: 12px;
+      background-color: #007bff;
+      color: white;
+      text-align: center;
+      text-decoration: none;
+      border-radius: 5px;
+    }
+    #jsonData {
+      width: 100%;
+      height: 300px;
+      font-family: monospace;
+      font-size: 14px;
+      border: 1px solid #ccc;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="experimentContainer">
+    <div id="taskContainer"></div>
+    <div id="status">
+        <b>Instructions:</b> You are about to see a series of questions and answers. Each one will be displayed for about 12 seconds. Please read them to understand the logic. Feel free to look back and forth between the question and the answer as you think.
+    </div>
+    <button id="startButton" disabled>Calibrating... Please Follow the Dot</button>
+  </div>
+  
+  <div id="results">
+    <h2>Experiment Complete!</h2>
+    <p>Thank you! Your gaze data has been analyzed and tagged. You can download it below.</p>
+    <a href="#" id="downloadLink">Download tagged_results.json</a>
+    <h3>Raw JSON Data</h3>
+    <textarea id="jsonData" readonly></textarea>
+  </div>
+
+  <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+  <script>
+    // --- Configuration ---
+    const tasks = [
+      {
+        question: "A farmer has 17 sheep and all but 8 die. How many sheep are left?",
+        answer: "The answer is 8. The phrase 'all but 8' directly states the number remaining."
+      },
+      {
+        question: "What is the meaning of the sentence: The old man the boat?",
+        answer: "The word 'man' is used as a verb, meaning to operate. The elderly are staffing the boat."
+      },
+      {
+        question: "Data: Team A scored 20 points. Team B scored 40. Team C scored 30. Is the following statement true or false? Team B scored more than A and C combined.",
+        answer: "False. Team A and C's combined score is 50, which is more than Team B's score of 40."
+      }
+    ];
+    const DURATION_PER_TASK = 12000; // 12 seconds in milliseconds
+
+    // --- UI Elements ---
+    const taskContainer = document.getElementById("taskContainer");
+    const statusEl = document.getElementById("status");
+    const startButton = document.getElementById("startButton");
+    const experimentContainer = document.getElementById("experimentContainer");
+    const resultsContainer = document.getElementById("results");
+
+    // --- State Variables ---
+    let allResults = [];
+    let currentTaskIndex = 0;
+    let gazeCounts = [];
+    let scanpath = []; // This will store indices
+    let wordSpans = [];
+    let allWords = [];
+    let collecting = false;
+    let currentWord = null;
+    let lastWord = null;
+    let dwellStart = 0;
+
+    // --- WebGazer Initialization ---
+    window.onload = async () => {
+      await webgazer.setRegression("ridge")
+        .setGazeListener((data, elapsed) => {
+          if (!data || !collecting) return;
+          const { x, y } = data;
+          let hitWordIndex = null;
+          wordSpans.forEach((span, i) => {
+            const rect = span.getBoundingClientRect();
+            if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+              hitWordIndex = i;
+              gazeCounts[i]++;
+            }
+          });
+          if (hitWordIndex !== null) {
+            if (hitWordIndex !== currentWord) {
+              currentWord = hitWordIndex;
+              dwellStart = elapsed;
+            } else {
+              if (elapsed - dwellStart > 100) {
+                if (hitWordIndex !== lastWord) {
+                  scanpath.push(hitWordIndex);
+                  lastWord = hitWordIndex;
+                }
+              }
+            }
+          }
+        })
+        .begin();
+      
+      webgazer.showVideoPreview(false).showPredictionPoints(false);
+      webgazer.clearData();
+
+      startButton.disabled = false;
+      startButton.textContent = "Start Experiment";
+    };
+
+    // --- Experiment Flow ---
+    startButton.addEventListener("click", startExperiment);
+
+    function startExperiment() {
+      allResults = [];
+      currentTaskIndex = 0;
+      startButton.style.display = "none";
+      statusEl.style.display = "none"; 
+      showNextTask();
+    }
+
+    function showNextTask() {
+      if (currentTaskIndex >= tasks.length) {
+        displayFinalResults();
+        return;
+      }
+      taskContainer.innerHTML = "";
+      const task = tasks[currentTaskIndex];
+      const questionText = `Question: ${task.question}`;
+      const answerText = `Answer: ${task.answer}`;
+      
+      allWords = [];
+      gazeCounts = [];
+      scanpath = [];
+      wordSpans = [];
+      currentWord = null;
+      lastWord = null;
+
+      const qSpan = document.createElement('div');
+      qSpan.className = 'question';
+      questionText.split(/\s+/).forEach(word => {
+          allWords.push(word);
+          const span = document.createElement("span");
+          span.textContent = word;
+          qSpan.appendChild(span);
+          wordSpans.push(span);
+      });
+      taskContainer.appendChild(qSpan);
+
+      const aSpan = document.createElement('div');
+      aSpan.className = 'answer';
+      answerText.split(/\s+/).forEach(word => {
+          allWords.push(word);
+          const span = document.createElement("span");
+          span.textContent = word;
+          aSpan.appendChild(span);
+          wordSpans.push(span);
+      });
+      taskContainer.appendChild(aSpan);
+      
+      gazeCounts = new Array(allWords.length).fill(0);
+
+      collecting = true;
+      setTimeout(processAndGoNext, DURATION_PER_TASK);
+    }
+
+    function processAndGoNext() {
+      collecting = false;
+      
+      // NEW: Perform analysis directly in the browser
+      const taggedWords = analyzeAndTagTrial(allWords, gazeCounts, scanpath);
+
+      allResults.push({
+        task: tasks[currentTaskIndex],
+        tagged_words: taggedWords,
+        scanpath_words: scanpath.map(i => allWords[i])
+      });
+      
+      currentTaskIndex++;
+      showNextTask();
+    }
+
+    function displayFinalResults() {
+      webgazer.end();
+      experimentContainer.style.display = "none";
+      resultsContainer.style.display = "block";
+      const jsonString = JSON.stringify(allResults, null, 2);
+      document.getElementById("jsonData").value = jsonString;
+      const blob = new Blob([jsonString], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const downloadLink = document.getElementById("downloadLink");
+      downloadLink.href = url;
+      downloadLink.download = "tagged_results.json";
+    }
+
+    // --- INTEGRATED ANALYSIS AND TAGGING LOGIC ---
+
+    const CONFIG = {
+        think_more_gaze_count: 15,
+        reevaluate_min_distance: 2,
+        skip_step_min_distance: 5,
+        parse_struggle_window: 5,
+        parse_struggle_word_range: 4
+    };
+
+    function analyzeAndTagTrial(allWords, gazeCounts, scanpath) {
+        let tags = Array(allWords.length).fill(null).map(() => []);
+
+        const answerStartIndex = allWords.indexOf("Answer:") > -1 ? allWords.indexOf("Answer:") : Math.floor(allWords.length / 2);
+
+        tags = tagThinkMore(tags, gazeCounts);
+        tags = tagRegressions(tags, scanpath, answerStartIndex);
+        tags = tagSkipStep(tags, scanpath);
+        tags = tagParseStruggle(tags, scanpath);
+        tags = tagCommitAnswer(tags, scanpath, allWords.length);
+
+        return allWords.map((word, i) => ({
+            word: word,
+            gaze_count: gazeCounts[i],
+            tags: tags[i].filter((val, idx, self) => self.indexOf(val) === idx) // Unique tags
+        }));
+    }
+
+    function tagThinkMore(tags, gazeCounts) {
+        gazeCounts.forEach((count, i) => {
+            if (count > CONFIG.think_more_gaze_count) {
+                tags[i].push("<think_more>");
+            }
+        });
+        return tags;
+    }
+
+    function tagRegressions(tags, scanpath, answerStartIndex) {
+        for (let i = 1; i < scanpath.length; i++) {
+            const origin = scanpath[i - 1];
+            const destination = scanpath[i];
+
+            if (destination < origin) { // It's a regression
+                if (origin >= answerStartIndex && destination < answerStartIndex) {
+                    tags[origin].push("<cross_reference>");
+                } else if (origin - destination >= CONFIG.reevaluate_min_distance) {
+                    tags[destination].push("<re-evaluate>");
+                }
+            }
+        }
+        return tags;
+    }
+
+    function tagSkipStep(tags, scanpath) {
+        for (let i = 1; i < scanpath.length; i++) {
+            const origin = scanpath[i - 1];
+            const destination = scanpath[i];
+            if (destination - origin > CONFIG.skip_step_min_distance) {
+                for (let j = origin + 1; j < destination; j++) {
+                    tags[j].push("<skip_step>");
+                }
+            }
+        }
+        return tags;
+    }
+
+    function tagParseStruggle(tags, scanpath) {
+        const { parse_struggle_window: windowSize, parse_struggle_word_range: wordRange } = CONFIG;
+        if (scanpath.length < windowSize) return tags;
+
+        for (let i = 0; i <= scanpath.length - windowSize; i++) {
+            const window = scanpath.slice(i, i + windowSize);
+            const minIdx = Math.min(...window);
+            const maxIdx = Math.max(...window);
+
+            if (maxIdx - minIdx <= wordRange) {
+                const hasRegression = window.some((val, idx, arr) => idx > 0 && val < arr[idx - 1]);
+                if (hasRegression) {
+                    for (let k = minIdx; k <= maxIdx; k++) {
+                        tags[k].push("<parse_struggle>");
+                    }
+                }
+            }
+        }
+        return tags;
+    }
+
+    function tagCommitAnswer(tags, scanpath, totalWords) {
+        if (!scanpath || scanpath.length < 3) return tags;
+        const lastGazePoints = scanpath.slice(-3);
+        if (lastGazePoints.every(p => p >= totalWords - 5)) {
+            tags[scanpath[scanpath.length - 1]].push("<commit_answer>");
+        }
+        return tags;
+    }
+
+  </script>
+</body>
+</html>

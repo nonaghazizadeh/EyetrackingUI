@@ -215,7 +215,6 @@
     
     startButton.addEventListener("click", startExperiment);
 
-    // Experiment state variables
     let gazeCounts = [], scanpath = [], wordSpans = [], allWords = [];
     let collecting = false;
     let currentWord = null, lastWord = null, dwellStart = 0;
@@ -239,7 +238,6 @@
       const questionText = `Question: ${task.question}`;
       const answerText = `Answer: ${task.answer}`;
       
-      // Reset all state variables for the new task
       allWords = []; gazeCounts = []; scanpath = []; wordSpans = [];
       currentWord = null; lastWord = null;
 
@@ -253,8 +251,6 @@
           qSpan.append(' ');
       });
       taskContainer.appendChild(qSpan);
-      
-      // We must re-populate wordSpans AFTER creating them in the DOM
       qSpan.querySelectorAll('span').forEach(span => wordSpans.push(span));
 
       const aSpan = document.createElement('div');
@@ -267,18 +263,14 @@
           aSpan.append(' ');
       });
       taskContainer.appendChild(aSpan);
-
-      // We must re-populate wordSpans AFTER creating them in the DOM
       aSpan.querySelectorAll('span').forEach(span => wordSpans.push(span));
       
       gazeCounts = new Array(allWords.length).fill(0);
       
-      // FIX: Set a fresh listener for each task to ensure it has the correct context
       webgazer.setGazeListener((data, elapsed) => {
         if (!data || !collecting) return;
         const { x, y } = data;
         let hitWordIndex = null;
-        // The listener will now correctly use the wordSpans for the CURRENT task
         wordSpans.forEach((span, i) => {
             const rect = span.getBoundingClientRect();
             if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
@@ -306,7 +298,7 @@
     }
 
     function processAndGoNext() {
-      collecting = false; // Stop the listener from processing data
+      collecting = false;
       const taggedWords = analyzeAndTagTrial(allWords, gazeCounts, scanpath);
       allResults.push({
         task: tasks[currentTaskIndex],
@@ -327,26 +319,60 @@
       const url = URL.createObjectURL(blob);
       const downloadLink = document.getElementById("downloadLink");
       downloadLink.href = url;
-      downloadlink.download = "tagged_results.json";
+      downloadLink.download = "tagged_results.json";
     }
 
-    // --- Analysis Functions (Unchanged) ---
-    const CONFIG = { think_more_gaze_count: 15, reevaluate_min_distance: 2, skip_step_min_distance: 8, parse_struggle_window: 5, parse_struggle_word_range: 4 };
+    // --- Analysis Functions ---
+    const CONFIG = {
+        think_more_gaze_count: 15,
+        reevaluate_min_distance: 2,
+        skip_step_min_distance: 8, // Using the less sensitive value of 8
+        parse_struggle_window: 5,
+        parse_struggle_word_range: 4
+    };
+
     function analyzeAndTagTrial(allWords, gazeCounts, scanpath) {
         let tags = Array(allWords.length).fill(null).map(() => []);
         const answerStartIndex = allWords.indexOf("Answer:") > -1 ? allWords.indexOf("Answer:") : Math.floor(allWords.length / 2);
+        
+        // IMPORTANT: Run commit_answer first, as it identifies a specific type of skip
+        tags = tagCommitAnswer(tags, scanpath, allWords.length);
+        
         tags = tagThinkMore(tags, gazeCounts);
         tags = tagRegressions(tags, scanpath, answerStartIndex);
         tags = tagSkipStep(tags, scanpath);
         tags = tagParseStruggle(tags, scanpath);
-        tags = tagCommitAnswer(tags, scanpath, allWords.length);
+        
         return allWords.map((word, i) => ({ word: word, gaze_count: gazeCounts[i], tags: [...new Set(tags[i])] }));
     }
     function tagThinkMore(tags, gazeCounts) { gazeCounts.forEach((c, i) => { if (c > CONFIG.think_more_gaze_count) tags[i].push("<think_more>"); }); return tags; }
     function tagRegressions(tags, scanpath, answerStartIndex) { for (let i = 1; i < scanpath.length; i++) { const o = scanpath[i - 1], d = scanpath[i]; if (d < o) { if (o >= answerStartIndex && d < answerStartIndex) { tags[o].push("<cross_reference>"); } else if (o - d >= CONFIG.reevaluate_min_distance) { tags[d].push("<re-evaluate>"); } } } return tags; }
     function tagSkipStep(tags, scanpath) { for (let i = 1; i < scanpath.length; i++) { const o = scanpath[i - 1], d = scanpath[i]; if (d - o > CONFIG.skip_step_min_distance) { for (let j = o + 1; j < d; j++) tags[j].push("<skip_step>"); } } return tags; }
     function tagParseStruggle(tags, scanpath) { const { parse_struggle_window: w, parse_struggle_word_range: r } = CONFIG; if (scanpath.length < w) return tags; for (let i = 0; i <= scanpath.length - w; i++) { const win = scanpath.slice(i, i + w); const min = Math.min(...win), max = Math.max(...win); if (max - min <= r) { if (win.some((v, j, a) => j > 0 && v < a[j - 1])) { for (let k = min; k <= max; k++) tags[k].push("<parse_struggle>"); } } } return tags; }
-    function tagCommitAnswer(tags, scanpath, totalWords) { if (!scanpath || scanpath.length < 3) return tags; const last = scanpath.slice(-3); if (last.every(p => p >= totalWords - 5)) tags[scanpath[scanpath.length - 1]].push("<commit_answer>"); return tags; }
+    
+    // REWRITTEN LOGIC for <commit_answer> based on your new definition
+    function tagCommitAnswer(tags, scanpath, totalWords) {
+        if (!scanpath || scanpath.length < 2) return tags;
+        
+        // Define the "end zone" as the last 10% of the text.
+        const endZoneStartIndex = Math.floor(totalWords * 0.90);
+
+        for (let i = 1; i < scanpath.length; i++) {
+            const origin = scanpath[i - 1];
+            const destination = scanpath[i];
+
+            // Check for a long forward skip that lands in the end zone
+            const isLongSkip = (destination - origin) > CONFIG.skip_step_min_distance;
+            const landsAtEnd = destination >= endZoneStartIndex;
+
+            if (isLongSkip && landsAtEnd) {
+                // Tag the word *before* the skip as the commit point
+                tags[origin].push("<commit_answer>");
+                return tags; // Important: only tag the first occurrence and then exit.
+            }
+        }
+        return tags;
+    }
 
   </script>
 </body>

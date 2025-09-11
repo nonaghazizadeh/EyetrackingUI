@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cognitive Eye-Tracking Experiment</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 2em;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: #fafafa;
+      text-align: center;
+    }
+    #mainContainer, #results {
+      width: 80%;
+      max-width: 800px;
+    }
+    /* NEW: Styles for the calibration step */
+    #calibrationArea {
+      position: relative;
+      width: 400px;
+      height: 300px;
+      background: #222;
+      border-radius: 8px;
+      margin-bottom: 1em;
+    }
+    #webgazerVideoFeed, #faceOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    #faceOverlay {
+      stroke-width: 4px;
+      transition: stroke 0.3s ease-in-out;
+    }
+    #taskContainer {
+      font-size: 24px;
+      line-height: 1.8em;
+      min-height: 6em;
+      padding: 1.5em;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background: #fff;
+      margin-bottom: 1.5em;
+      display: none; /* Initially hidden */
+    }
+    .question, .answer {
+        text-align: left;
+        word-break: break-word;
+    }
+    .question {
+        font-weight: bold;
+        color: #333;
+        display: block;
+        margin-bottom: 1.5em;
+    }
+    .answer {
+        color: #555;
+        display: block;
+        font-weight: normal;
+    }
+    #status {
+      font-size: 18px;
+      color: #555;
+      margin-bottom: 1em;
+      line-height: 1.6;
+      max-width: 600px;
+    }
+    #startButton {
+      font-size: 20px;
+      padding: 10px 20px;
+      cursor: pointer;
+    }
+    #results { display: none; text-align: left; }
+    #downloadLink {
+      display: block;
+      margin: 1em 0;
+      font-size: 18px;
+      padding: 12px;
+      background-color: #007bff;
+      color: white;
+      text-align: center;
+      text-decoration: none;
+      border-radius: 5px;
+    }
+    #jsonData {
+      width: 100%;
+      height: 300px;
+      font-family: monospace;
+      font-size: 14px;
+      border: 1px solid #ccc;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="mainContainer">
+    <div id="calibrationArea">
+      <svg id="faceOverlay" viewbox="0 0 400 300">
+        <ellipse cx="200" cy="150" rx="100" ry="130" fill="none" stroke="red"/>
+      </svg>
+    </div>
+    
+    <div id="taskContainer"></div>
+    
+    <div id="status">Please position your face inside the red oval.</div>
+    <button id="startButton" disabled>Start Experiment</button>
+  </div>
+  
+  <div id="results">
+    <h2>Experiment Complete!</h2>
+    <p>Thank you! Your gaze data has been analyzed and tagged. You can download it below.</p>
+    <a href="#" id="downloadLink">Download tagged_results.json</a>
+    <h3>Raw JSON Data</h3>
+    <textarea id="jsonData" readonly></textarea>
+  </div>
+
+  <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+  <script>
+    // --- Configuration ---
+    const tasks = [
+      {
+        question: "A farmer has 17 sheep and all but 8 die. How many sheep are left?",
+        answer: "The answer is 8. The phrase 'all but 8' directly states the number remaining."
+      },
+      {
+        question: "What is the meaning of the sentence: The old man the boat?",
+        answer: "The word 'man' is used as a verb, meaning to operate. The elderly are staffing the boat."
+      },
+      {
+        question: "Data: Team A scored 20 points. Team B scored 40. Team C scored 30. Is the following statement true or false? Team B scored more than A and C combined.",
+        answer: "False. Team A and C's combined score is 50, which is more than Team B's score of 40."
+      }
+    ];
+    const DURATION_PER_TASK = 12000; // 12 seconds in milliseconds
+
+    // --- UI Elements ---
+    const calibrationArea = document.getElementById("calibrationArea");
+    const faceOverlay = document.getElementById("faceOverlay").querySelector('ellipse');
+    const taskContainer = document.getElementById("taskContainer");
+    const statusEl = document.getElementById("status");
+    const startButton = document.getElementById("startButton");
+    const mainContainer = document.getElementById("mainContainer");
+    const resultsContainer = document.getElementById("results");
+
+    // --- State Variables ---
+    let allResults = [];
+    let currentTaskIndex = 0;
+    let gazeCounts = [], scanpath = [], wordSpans = [], allWords = [];
+    let collecting = false;
+    let currentWord = null, lastWord = null, dwellStart = 0;
+    
+    // NEW: Calibration state
+    let faceCheckInterval = null;
+    let faceInBoxSince = 0;
+
+    window.onload = async () => {
+      // Start WebGazer but don't set the main gaze listener yet.
+      await webgazer.setRegression("ridge").begin();
+      
+      // Setup video preview for calibration
+      webgazer.showVideoPreview(true).showPredictionPoints(false);
+      webgazer.clearData();
+
+      // Start the face position check
+      faceCheckInterval = setInterval(checkFacePosition, 100);
+    };
+    
+    // NEW: Function to check if face is in the right position
+    function checkFacePosition() {
+        const faceData = webgazer.getFaceDetectionData();
+        const video = document.getElementById('webgazerVideoFeed');
+        if (!faceData || !video) return;
+
+        // Ideal face position and size (relative to video feed)
+        const target = {
+            x: video.width * 0.5,
+            y: video.height * 0.5,
+            w: video.width * 0.4, // Face should take up about 40% of the video width
+        };
+        const tolerance = { x: 50, y: 50, w: 50 };
+        
+        const faceBox = faceData[0].bbox;
+        const faceCenter = { x: faceBox.x + faceBox.w / 2, y: faceBox.y + faceBox.h / 2 };
+
+        const dx = Math.abs(faceCenter.x - target.x);
+        const dy = Math.abs(faceCenter.y - target.y);
+        const dw = Math.abs(faceBox.w - target.w);
+        
+        let message = "";
+        let isFaceInBox = true;
+
+        if (dw > tolerance.w) {
+            message = faceBox.w < target.w ? "Move Closer" : "Move Further Away";
+            isFaceInBox = false;
+        } else if (dx > tolerance.x || dy > tolerance.y) {
+            message = "Please Center Your Face";
+            isFaceInBox = false;
+        } else {
+            message = "Hold Steady...";
+        }
+
+        if (isFaceInBox) {
+            faceOverlay.style.stroke = 'green';
+            if (faceInBoxSince === 0) {
+                faceInBoxSince = Date.now();
+            } else if (Date.now() - faceInBoxSince > 2000) { // Hold for 2 seconds
+                clearInterval(faceCheckInterval);
+                statusEl.textContent = "Great! You are ready to start the experiment.";
+                startButton.disabled = false;
+            }
+        } else {
+            faceOverlay.style.stroke = 'red';
+            statusEl.textContent = message;
+            faceInBoxSince = 0; // Reset timer
+            startButton.disabled = true;
+        }
+    }
+
+    startButton.addEventListener("click", startExperiment);
+
+    function startExperiment() {
+      // Clean up calibration UI
+      clearInterval(faceCheckInterval);
+      calibrationArea.style.display = "none";
+      taskContainer.style.display = "block";
+      webgazer.showVideoPreview(false);
+
+      // --- SET THE OFFICIAL GAZE LISTENER FOR THE EXPERIMENT ---
+      webgazer.setGazeListener((data, elapsed) => {
+        if (!data || !collecting) return;
+        const { x, y } = data;
+        let hitWordIndex = null;
+        wordSpans.forEach((span, i) => {
+          const rect = span.getBoundingClientRect();
+          if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+            hitWordIndex = i;
+            gazeCounts[i]++;
+          }
+        });
+        if (hitWordIndex !== null) {
+          if (hitWordIndex !== currentWord) {
+            currentWord = hitWordIndex;
+            dwellStart = elapsed;
+          } else {
+            if (elapsed - dwellStart > 100) {
+              if (hitWordIndex !== lastWord) {
+                scanpath.push(hitWordIndex);
+                lastWord = hitWordIndex;
+              }
+            }
+          }
+        }
+      });
+
+      // --- Start the actual task flow ---
+      allResults = [];
+      currentTaskIndex = 0;
+      startButton.style.display = "none";
+      statusEl.style.display = "none";
+      showNextTask();
+    }
+    
+    function showNextTask() {
+      // ... (This function and the rest of the analysis code remain the same)
+      if (currentTaskIndex >= tasks.length) {
+        displayFinalResults();
+        return;
+      }
+      taskContainer.innerHTML = "";
+      const task = tasks[currentTaskIndex];
+      const questionText = `Question: ${task.question}`;
+      const answerText = `Answer: ${task.answer}`;
+      
+      allWords = []; gazeCounts = []; scanpath = []; wordSpans = [];
+      currentWord = null; lastWord = null;
+
+      const qSpan = document.createElement('div');
+      qSpan.className = 'question';
+      questionText.split(/\s+/).forEach(word => {
+          allWords.push(word);
+          const span = document.createElement("span");
+          span.textContent = word;
+          qSpan.appendChild(span);
+          wordSpans.push(span);
+      });
+      taskContainer.appendChild(qSpan);
+
+      const aSpan = document.createElement('div');
+      aSpan.className = 'answer';
+      answerText.split(/\s+/).forEach(word => {
+          allWords.push(word);
+          const span = document.createElement("span");
+          span.textContent = word;
+          aSpan.appendChild(span);
+          wordSpans.push(span);
+      });
+      taskContainer.appendChild(aSpan);
+      
+      gazeCounts = new Array(allWords.length).fill(0);
+
+      collecting = true;
+      setTimeout(processAndGoNext, DURATION_PER_TASK);
+    }
+
+    function processAndGoNext() {
+      collecting = false;
+      const taggedWords = analyzeAndTagTrial(allWords, gazeCounts, scanpath);
+      allResults.push({
+        task: tasks[currentTaskIndex],
+        tagged_words: taggedWords,
+        scanpath_words: scanpath.map(i => allWords[i])
+      });
+      currentTaskIndex++;
+      showNextTask();
+    }
+
+    function displayFinalResults() {
+      webgazer.end();
+      mainContainer.style.display = "none";
+      resultsContainer.style.display = "block";
+      const jsonString = JSON.stringify(allResults, null, 2);
+      document.getElementById("jsonData").value = jsonString;
+      const blob = new Blob([jsonString], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const downloadLink = document.getElementById("downloadLink");
+      downloadLink.href = url;
+      downloadLink.download = "tagged_results.json";
+    }
+
+    const CONFIG = { think_more_gaze_count: 15, reevaluate_min_distance: 2, skip_step_min_distance: 5, parse_struggle_window: 5, parse_struggle_word_range: 4 };
+    function analyzeAndTagTrial(allWords, gazeCounts, scanpath) {
+        let tags = Array(allWords.length).fill(null).map(() => []);
+        const answerStartIndex = allWords.indexOf("Answer:") > -1 ? allWords.indexOf("Answer:") : Math.floor(allWords.length / 2);
+        tags = tagThinkMore(tags, gazeCounts);
+        tags = tagRegressions(tags, scanpath, answerStartIndex);
+        tags = tagSkipStep(tags, scanpath);
+        tags = tagParseStruggle(tags, scanpath);
+        tags = tagCommitAnswer(tags, scanpath, allWords.length);
+        return allWords.map((word, i) => ({ word: word, gaze_count: gazeCounts[i], tags: [...new Set(tags[i])] }));
+    }
+    function tagThinkMore(tags, gazeCounts) { gazeCounts.forEach((c, i) => { if (c > CONFIG.think_more_gaze_count) tags[i].push("<think_more>"); }); return tags; }
+    function tagRegressions(tags, scanpath, answerStartIndex) { for (let i = 1; i < scanpath.length; i++) { const o = scanpath[i - 1], d = scanpath[i]; if (d < o) { if (o >= answerStartIndex && d < answerStartIndex) { tags[o].push("<cross_reference>"); } else if (o - d >= CONFIG.reevaluate_min_distance) { tags[d].push("<re-evaluate>"); } } } return tags; }
+    function tagSkipStep(tags, scanpath) { for (let i = 1; i < scanpath.length; i++) { const o = scanpath[i - 1], d = scanpath[i]; if (d - o > CONFIG.skip_step_min_distance) { for (let j = o + 1; j < d; j++) tags[j].push("<skip_step>"); } } return tags; }
+    function tagParseStruggle(tags, scanpath) { const { parse_struggle_window: w, parse_struggle_word_range: r } = CONFIG; if (scanpath.length < w) return tags; for (let i = 0; i <= scanpath.length - w; i++) { const win = scanpath.slice(i, i + w); const min = Math.min(...win), max = Math.max(...win); if (max - min <= r) { if (win.some((v, j, a) => j > 0 && v < a[j - 1])) { for (let k = min; k <= max; k++) tags[k].push("<parse_struggle>"); } } } return tags; }
+    function tagCommitAnswer(tags, scanpath, totalWords) { if (!scanpath || scanpath.length < 3) return tags; const last = scanpath.slice(-3); if (last.every(p => p >= totalWords - 5)) tags[scanpath[scanpath.length - 1]].push("<commit_answer>"); return tags; }
+  </script>
+</body>
+</html>
